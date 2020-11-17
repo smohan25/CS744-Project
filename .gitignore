@@ -1,0 +1,13 @@
+# IDE
+.vscode/
+
+# Data
+data/
+datasets/
+
+# Evaluation
+out/
+evaluation/
+
+# Python
+__pycache__/
