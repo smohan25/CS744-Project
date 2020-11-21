@@ -34,17 +34,6 @@ parser.add_argument('--master-ip', default='tcp://10.10.1.1:6585', type=str,
 parser.add_argument('--num-nodes', type=int, help='total number of nodes')
 parser.add_argument('--topology', type=str, help='topology for all reduce: ring/recursive halfing/doulbing')
 
-'''
-def average_gradients(model):
-    """                                                                                                                                                                    
-    Averages the gradients using all reduce                                                                                                                                
-    """
-    size = float(dist.get_world_size())
-    for param in model.parameters():
-        dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
-        param.grad.data /= size
-'''
-
 def topHalf(tensor):
     # In dimension 0
     size = tensor.size(0)
@@ -60,7 +49,7 @@ def botHalf(tensor):
     else:
         return tensor.narrow(0, size/2+1, size/2)
     
-def average_gradients2(model, rank, size):
+def recursiveHalvingDoubling(model, rank, size):
     for param in model.parameters():
         original_val = param.grad.data
         original_val = torch.tensor([1, 2, 3, 4])
@@ -124,8 +113,8 @@ def getTensorChunk(tensor, i, totalChunks, chunkSize):
         i = totalChunks + i
     # If it's the last chunk, return till end of vector
     if i == totalChunks - 1:
-        chunkSize = size - i*chunkSize
-        tensor.narrow(0, i*chunkSize, chunkSize)
+        newSize = size - i*chunkSize
+        return tensor.narrow(0, i*chunkSize, newSize)
     return tensor.narrow(0, i*chunkSize, chunkSize)
 
 def getChunkPos(i, totalChunks):
@@ -138,39 +127,36 @@ def getChunkPos(i, totalChunks):
 def ringAllReduce(model, rank, size):
     for param in model.parameters():
         original_val = param.grad.data
-        original_val = torch.tensor([1, 2, 3])
+        original_val = torch.tensor([1, 2, 3, 4])
         resVec = original_val
         tensorSize = original_val.size(0)
         totalChunks = size
         chunkSize = tensorSize/totalChunks
         if tensorSize  % size != 0:
             last = tensorSize % size
-        print "Going in the looppp....", size
+
         for i in range(size-1):
             dst = (rank + 1) % size
             sendVector = getTensorChunk(resVec, rank - i, totalChunks, chunkSize)
-            print "vector is...", sendVector, dst
             send_sig = dist.isend(sendVector, dst=dst)
-            print "Sent....", sendVector.size()
+            
             # Handle the case where the last chunk's size is > the other chunk sizes. eg vector of size 9 and 4 nodes.
             recvNode = rank - 1 if rank - 1 >= 0 else size - 1
             recvChunk = getChunkPos(recvNode - i, totalChunks)
             sizeList = list(resVec.size())
             if recvChunk == totalChunks - 1:
-                #recvVecLike = getTensorChunk(resVec, recvChunk, totalChunks, chunkSize)
                 sizeList[0] = tensorSize - recvChunk*chunkSize
             else:
                 sizeList[0] = chunkSize
             recvVec = torch.zeros(sizeList, dtype=sendVector.dtype)
-            print "Waiting....", recvVec.size()
+
             recv_sig = dist.irecv(recvVec, src=recvNode)
             send_sig.wait()
             recv_sig.wait()
-            print "Received..."
             
             sizeList = list(resVec.size())
             if recvChunk == 0:
-                sizeList[0] = size - chunkSize
+                sizeList[0] = tensorSize - chunkSize
                 concatVec = torch.zeros(sizeList, dtype=sendVector.dtype)
                 recvVec = torch.cat((recvVec, concatVec))
             elif recvChunk == totalChunks - 1:
@@ -180,13 +166,37 @@ def ringAllReduce(model, rank, size):
             else:
                 sizeList[0] = recvChunk*chunkSize
                 concatVec1 = torch.zeros(sizeList, dtype=sendVector.dtype)
-                sizeList[0] = size - (recvChunk+1)*chunkSize
-                concatVec2 = toech.zeros(sizeList, dtype=sendVector.dtype)
+                sizeList[0] = tensorSize - (recvChunk+1)*chunkSize
+                concatVec2 = torch.zeros(sizeList, dtype=sendVector.dtype)
                 recvVec = torch.cat((concatVec1, recvVec, concatVec2))
+
             resVec = resVec.add(recvVec)
-            print "Value is", resVec
-        print "Value is", resVec
-        exit()
+             
+        # Perform all-gather now....                                                                                                                                                                        
+        for i in range(size-1):
+            dst = (rank + 1) % size
+            sendVector = getTensorChunk(resVec, (rank - i + 1) % size, totalChunks, chunkSize)
+            send_sig = dist.isend(sendVector, dst=dst)
+            recvNode = rank - 1 if rank - 1 >= 0 else size - 1
+            recvChunk = (recvNode - i + 1) %  size
+            sizeList = list(resVec.size())
+            if recvChunk == totalChunks - 1:
+                sizeList[0] = tensorSize - recvChunk*chunkSize
+            else:
+                sizeList[0] = chunkSize
+            recvVec = torch.zeros(sizeList, dtype=sendVector.dtype)
+
+            recv_sig = dist.irecv(recvVec, src=recvNode)
+            send_sig.wait()
+            recv_sig.wait()
+
+            # Replace received chunk in resVec                                                                                                                                                             
+            for	i in range(0, recvVec.size(0)):
+                resVec[recvChunk*chunkSize + i] = recvVec[i]
+
+        param.grad.data = resVec/size
+        #print "Value is", resVec
+        #exit()
 
 def train_model(model, train_loader, optimizer, criterion, epoch, args):
     """                                                                                                                                                                    
@@ -221,9 +231,8 @@ def train_model(model, train_loader, optimizer, criterion, epoch, args):
         # Find the gradients
         loss.backward()
 
-        #average_gradients(model)
         if args.topology == "rec-double-half":
-            average_gradients2(model, args.rank, args.num_nodes)
+            recursiveHalvingDoubling(model, args.rank, args.num_nodes)
         elif args.topology == "ring":
             ringAllReduce(model, args.rank, args.num_nodes)
 
