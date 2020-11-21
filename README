@@ -1,6 +1,6 @@
 To use:
 
-python main.py --rank <rank> --num-nodes <number of nodes involved> --master-ip <masterip>
+python main.py --rank <rank> --num-nodes <number of nodes involved> --master-ip <masterip> --topology <ring/rec>
 
 
-python main.py --rank 0 --num-nodes 4 --master-ip 10.10.1.1
+python main.py --rank 0 --num-nodes 4 --master-ip 10.10.1.1 --topology ring
