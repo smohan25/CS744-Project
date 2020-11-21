@@ -11,3 +11,7 @@ evaluation/
 
 # Python
 __pycache__/
+venv/
+
+# scratch
+scratch/
