@@ -138,6 +138,7 @@ def getChunkPos(i, totalChunks):
 def ringAllReduce(model, rank, size):
     for param in model.parameters():
         original_val = param.grad.data
+        original_val = torch.tensor([1, 2, 3])
         resVec = original_val
         tensorSize = original_val.size(0)
         totalChunks = size
@@ -146,39 +147,40 @@ def ringAllReduce(model, rank, size):
             last = tensorSize % size
         for i in range(size-1):
             dst = (rank + i) % size
-            if rank == size - 1:
-                
+            sendVector = getTensorChunk(resVec, rank - i, totalChunks, chunkSize)
+            send_sig = dist.isend(sendVector, dst)
+            # Handle the case where the last chunk's size is > the other chunk sizes. eg vector of size 9 and 4 nodes.
+            recvNode = rank - 1 if rank - 1 >= 0 else size - 1
+            recvChunk = getChunkPos(recvNode - i, totalChunks)
+            sizeList = list(size)
+            if recvChunk == totalChunks - 1:
+                #recvVecLike = getTensorChunk(resVec, recvChunk, totalChunks, chunkSize)
+                sizeList[0] = tensorSize - recvChunk*chunkSize
             else:
-                sendVector = getTensorChunk(resVec, rank - i, totalChunks, chunkSize)
-                dist.send(sendVector, dst)
-                # Handle the case where the last chunk's size is > the other chunk sizes. eg vector of size 9 and 4 nodes.
-                recvNode = rank - 1 >= 0? rank - 1 : size - 1
-                recvChunk = getChunkPos(recvNode - i, totalChunks)
-                if recvChunk == totalChunks - 1:
-                    #recvVecLike = getTensorChunk(resVec, recvChunk, totalChunks, chunkSize)
-                    sizeList = list(size)
-                    sizeList[0] = tensorSize - recvChunk*chunkSize
-                    recvVecLike = torch.zeros(sizeList)
-                    recvVec = torch.zeros_like(recvVecLike)
-                else:
-                    recvVec = torch.zeros_like(sendVector)
-                dist.recv(recvVec, recvNode)
-                sizeList = list(size)
-                if recvChunk == 0:
-                    sizeList[0] = size - chunkSize
-                    concatVec = torch.zeros(sizeList)
-                    recvVec = torch.cat((recvVec, concatVec))
-                elif recvChunk == totalChunks - 1:
-                    sizeList[0] = recvChunk*chunkSize
-                    concatVec = torch.zeros(sizeList)
-                    recvVec = torch.cat((concatVec, recvVec))
-                else:
-                    sizeList[0] = recvChunk*chunkSize
-                    concatVec1 = torch.zeros(sizeList)
-                    sizeList[0] = size - (recvChunk+1)*chunkSize
-                    concatVec2 = toech.zeros(sizeList)
-                    recvVec = torch.cat((concatVec1, recvVec, concatVec2))
-                resVec = resVec.add(recvVec)
+                sizeList[0] = chunkSize
+            recvVece = torch.zeros(sizeList)
+            recv_sig = dist.irecv(recvVec, recvNode)
+            send_sig.wait()
+            recv_sig.wait()
+            
+            sizeList = list(size)
+            if recvChunk == 0:
+                sizeList[0] = size - chunkSize
+                concatVec = torch.zeros(sizeList)
+                recvVec = torch.cat((recvVec, concatVec))
+            elif recvChunk == totalChunks - 1:
+                sizeList[0] = recvChunk*chunkSize
+                concatVec = torch.zeros(sizeList)
+                recvVec = torch.cat((concatVec, recvVec))
+            else:
+                sizeList[0] = recvChunk*chunkSize
+                concatVec1 = torch.zeros(sizeList)
+                sizeList[0] = size - (recvChunk+1)*chunkSize
+                concatVec2 = toech.zeros(sizeList)
+                recvVec = torch.cat((concatVec1, recvVec, concatVec2))
+            resVec = resVec.add(recvVec)
+        print "Value is", resVec
+        exit()
 
 def train_model(model, train_loader, optimizer, criterion, epoch, args):
     """                                                                                                                                                                    
