@@ -9,7 +9,7 @@ import torch.distributed as dist
 
 import argparse
 
-from util import treeAllReduce
+from util import tree_all_reduce
 
 parser = argparse.ArgumentParser(description="Basic Tree AllReduce")
 parser.add_argument("--rank", type=int, default=0, help="Rank of the process")
@@ -25,6 +25,6 @@ t = torch.eye(2) * (args.rank + 1)
 
 print("Old tensor at", args.rank, "was", t)
   
-treeAllReduce(args.rank, t, world_size)
+tree_all_reduce(args.rank, t, world_size)
 
 print("New tensor at", args.rank, "is", t)
