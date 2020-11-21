@@ -125,7 +125,7 @@ def getTensorChunk(tensor, i, totalChunks, chunkSize):
     # If it's the last chunk, return till end of vector
     if i == totalChunks - 1:
         chunkSize = size - i*chunkSize
-        tensor.narror(0, i*chunkSize, chunkSize)
+        tensor.narrow(0, i*chunkSize, chunkSize)
     return tensor.narrow(0, i*chunkSize, chunkSize)
 
 def getChunkPos(i, totalChunks):
@@ -145,40 +145,46 @@ def ringAllReduce(model, rank, size):
         chunkSize = tensorSize/totalChunks
         if tensorSize  % size != 0:
             last = tensorSize % size
+        print "Going in the looppp....", size
         for i in range(size-1):
-            dst = (rank + i) % size
+            dst = (rank + 1) % size
             sendVector = getTensorChunk(resVec, rank - i, totalChunks, chunkSize)
-            send_sig = dist.isend(sendVector, dst)
+            print "vector is...", sendVector, dst
+            send_sig = dist.isend(sendVector, dst=dst)
+            print "Sent....", sendVector.size()
             # Handle the case where the last chunk's size is > the other chunk sizes. eg vector of size 9 and 4 nodes.
             recvNode = rank - 1 if rank - 1 >= 0 else size - 1
             recvChunk = getChunkPos(recvNode - i, totalChunks)
-            sizeList = list(size)
+            sizeList = list(resVec.size())
             if recvChunk == totalChunks - 1:
                 #recvVecLike = getTensorChunk(resVec, recvChunk, totalChunks, chunkSize)
                 sizeList[0] = tensorSize - recvChunk*chunkSize
             else:
                 sizeList[0] = chunkSize
-            recvVece = torch.zeros(sizeList)
-            recv_sig = dist.irecv(recvVec, recvNode)
+            recvVec = torch.zeros(sizeList, dtype=sendVector.dtype)
+            print "Waiting....", recvVec.size()
+            recv_sig = dist.irecv(recvVec, src=recvNode)
             send_sig.wait()
             recv_sig.wait()
+            print "Received..."
             
-            sizeList = list(size)
+            sizeList = list(resVec.size())
             if recvChunk == 0:
                 sizeList[0] = size - chunkSize
-                concatVec = torch.zeros(sizeList)
+                concatVec = torch.zeros(sizeList, dtype=sendVector.dtype)
                 recvVec = torch.cat((recvVec, concatVec))
             elif recvChunk == totalChunks - 1:
                 sizeList[0] = recvChunk*chunkSize
-                concatVec = torch.zeros(sizeList)
+                concatVec = torch.zeros(sizeList, dtype=sendVector.dtype)
                 recvVec = torch.cat((concatVec, recvVec))
             else:
                 sizeList[0] = recvChunk*chunkSize
-                concatVec1 = torch.zeros(sizeList)
+                concatVec1 = torch.zeros(sizeList, dtype=sendVector.dtype)
                 sizeList[0] = size - (recvChunk+1)*chunkSize
-                concatVec2 = toech.zeros(sizeList)
+                concatVec2 = toech.zeros(sizeList, dtype=sendVector.dtype)
                 recvVec = torch.cat((concatVec1, recvVec, concatVec2))
             resVec = resVec.add(recvVec)
+            print "Value is", resVec
         print "Value is", resVec
         exit()
 
