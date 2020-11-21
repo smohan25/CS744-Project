@@ -32,6 +32,7 @@ parser.add_argument('--rank', default=-1, type=int,
 parser.add_argument('--master-ip', default='tcp://10.10.1.1:6585', type=str,
                     help='master ip')
 parser.add_argument('--num-nodes', type=int, help='total number of nodes')
+parser.add_argument('--topology', type=str, help='topology for all reduce: ring/recursive halfing/doulbing')
 
 '''
 def average_gradients(model):
@@ -115,7 +116,69 @@ def average_gradients2(model, rank, size):
             d /= 2
         print "Value is", resVec
         exit()
-        
+
+def getTensorChunk(tensor, i, totalChunks, chunkSize):
+    """ Gets the ith chunk of the tensor """
+    size = tensor.size(0)
+    if i < 0:
+        i = totalChunks + i
+    # If it's the last chunk, return till end of vector
+    if i == totalChunks - 1:
+        chunkSize = size - i*chunkSize
+        tensor.narror(0, i*chunkSize, chunkSize)
+    return tensor.narrow(0, i*chunkSize, chunkSize)
+
+def getChunkPos(i, totalChunks):
+    """ When the chunk pos is -ve, return a +ve val """
+    if i < 0:
+        return totalChunks + i
+    else:
+        return i
+
+def ringAllReduce(model, rank, size):
+    for param in model.parameters():
+        original_val = param.grad.data
+        resVec = original_val
+        tensorSize = original_val.size(0)
+        totalChunks = size
+        chunkSize = tensorSize/totalChunks
+        if tensorSize  % size != 0:
+            last = tensorSize % size
+        for i in range(size-1):
+            dst = (rank + i) % size
+            if rank == size - 1:
+                
+            else:
+                sendVector = getTensorChunk(resVec, rank - i, totalChunks, chunkSize)
+                dist.send(sendVector, dst)
+                # Handle the case where the last chunk's size is > the other chunk sizes. eg vector of size 9 and 4 nodes.
+                recvNode = rank - 1 >= 0? rank - 1 : size - 1
+                recvChunk = getChunkPos(recvNode - i, totalChunks)
+                if recvChunk == totalChunks - 1:
+                    #recvVecLike = getTensorChunk(resVec, recvChunk, totalChunks, chunkSize)
+                    sizeList = list(size)
+                    sizeList[0] = tensorSize - recvChunk*chunkSize
+                    recvVecLike = torch.zeros(sizeList)
+                    recvVec = torch.zeros_like(recvVecLike)
+                else:
+                    recvVec = torch.zeros_like(sendVector)
+                dist.recv(recvVec, recvNode)
+                sizeList = list(size)
+                if recvChunk == 0:
+                    sizeList[0] = size - chunkSize
+                    concatVec = torch.zeros(sizeList)
+                    recvVec = torch.cat((recvVec, concatVec))
+                elif recvChunk == totalChunks - 1:
+                    sizeList[0] = recvChunk*chunkSize
+                    concatVec = torch.zeros(sizeList)
+                    recvVec = torch.cat((concatVec, recvVec))
+                else:
+                    sizeList[0] = recvChunk*chunkSize
+                    concatVec1 = torch.zeros(sizeList)
+                    sizeList[0] = size - (recvChunk+1)*chunkSize
+                    concatVec2 = toech.zeros(sizeList)
+                    recvVec = torch.cat((concatVec1, recvVec, concatVec2))
+                resVec = resVec.add(recvVec)
 
 def train_model(model, train_loader, optimizer, criterion, epoch, args):
     """                                                                                                                                                                    
@@ -151,7 +214,10 @@ def train_model(model, train_loader, optimizer, criterion, epoch, args):
         loss.backward()
 
         #average_gradients(model)
-        average_gradients2(model, args.rank, args.num_nodes)
+        if args.topology == "rec-double-half":
+            average_gradients2(model, args.rank, args.num_nodes)
+        elif args.topology == "ring":
+            ringAllReduce(model, args.rank, args.num_nodes)
 
         # Update the weights                                                                                                                                               
         optimizer.step()
