@@ -127,7 +127,7 @@ def getChunkPos(i, totalChunks):
 def ringAllReduce(model, rank, size):
     for param in model.parameters():
         original_val = param.grad.data
-        original_val = torch.tensor([1, 2, 3, 4])
+        #original_val = torch.tensor([1, 2, 3, 4])
         resVec = original_val
         tensorSize = original_val.size(0)
         totalChunks = size
