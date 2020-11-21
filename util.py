@@ -2,8 +2,9 @@ import torch
 import torch.distributed as dist
 
 import math
+from typing import List
 
-def treeAllReduce(rank: int, tensor: torch.Tensor, world_size: int):
+def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int):
   """
   Supports even number of nodes only.
   """
@@ -51,3 +52,46 @@ def treeAllReduce(rank: int, tensor: torch.Tensor, world_size: int):
       index = ins.index(rank)
       _out = outs[index]
       dist.recv(tensor, _out)
+
+
+def _my_swap(ins: List, start: int, swap_unit: int):
+  for i in range(start, start+swap_unit):
+    temp = ins[i]
+    ins[i] = ins[i+swap_unit]
+    ins[i+swap_unit] = temp
+
+
+def butterfly_all_reduce(rank: int, tensor: torch.Tensor, world_size: int):
+  """
+  Supports homogeneous Butterfly networks. Homogeneous networks have 2^n nodes.
+  """
+  # determine the number of layers
+  layers = int(math.log2(world_size))
+
+  # in and out are the same in this algorithm
+  for i in range(layers):
+    # generate the ins list
+    # how many nodes are grouped
+    swap_unit = 2 ** i
+    # skip
+    skip = 2 * swap_unit
+
+    ins = list(range(0, world_size))
+    for j in range(0, world_size, skip):
+      _my_swap(ins, j, swap_unit)
+
+    # send asynchronously
+    send_req = dist.isend(tensor, ins[rank])
+
+    # recv asynchronously
+    t = torch.zeros_like(tensor)
+    recv_req = dist.irecv(t, ins[rank])
+
+    send_req.wait()
+    recv_req.wait()
+
+    # merge
+    tensor += t
+  
+  # divide by world_size to get average
+  tensor /= world_size
