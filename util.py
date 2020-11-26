@@ -16,7 +16,54 @@ def to_sparse(x):
     indices = indices.t()
     values = x[tuple(indices[i] for i in range(indices.shape[0]))]
     return sparse_tensortype(indices, values, x.size())
-  
+
+def send_sparse(tensor, dst):
+    """ Sends a sparse tensor. To send a sparse tensor we need to communicate 3 things.
+    1. nnz - number of non-zero elements.
+    2. indices - the position of these non-zero elements.
+    3. values - the values of these non-zero elements.
+
+    Params: tensor - tensor to send
+    dst - destination node
+    """
+
+    # Convert to a sparse tensor
+    tensor = to_sparse(tensor)
+
+    send_nnz = dist.isend(torch.tensor(tensor._nnz()), dst)
+    send_indices = dist.isend(torch.tensor(tensor._indices()), dst)
+    send_values = dist.isend(torch.tensor(tensor._values()), dst)
+
+    send_nnz.wait()
+    send_indices.wait()
+    send_values.wait()
+
+def recv_sparse(src, tensorDim, tensorSize, dtype):
+    """ Receives a sparse tensor and returns a dense representation of it.
+    Params: src - the sender node
+    tensorDim - the dimension of the tensor to be received.
+    tensorSize - the size of the tensor.
+    dtype - type of tensor (eng: int)
+    """
+    
+    nnz = torch.zeros([1], dtype=dtype)
+    recv_nnz = dist.irecv(nnz, src)
+
+    recv_nnz.wait()
+    print('nnz', nnz)
+
+    indices = torch.zeros([tensorDim, nnz], dtype=dtype)
+    recv_indices = dist.irecv(indices, src)
+
+    values = torch.zeros([nnz], dtype=dtype)
+    recv_values = dist.irecv(values, src)
+
+    recv_indices.wait()
+    recv_values.wait()
+
+    recvSparseTensor = torch.sparse.LongTensor(indices, values, torch.Size(tensorSize))
+    return recvSparseTensor.to_dense()
+    
 def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int):
   """
   Supports even number of nodes only.
@@ -219,6 +266,7 @@ def ring_all_reduce(rank, tensor, size, sparse):
   tensor = torch.tensor([1,0,2,0,3,0,4,0])
   resVec = tensor
   tensorSize = tensor.size(0)
+  tensorDim = len(tensor.size())
   totalChunks = size
   chunkSize = int(tensorSize/totalChunks)
   if tensorSize  % size != 0:
@@ -231,28 +279,29 @@ def ring_all_reduce(rank, tensor, size, sparse):
     dst = (rank + 1) % size
     sendVector = getTensorChunk(resVec, rank - i, totalChunks, chunkSize)
     if sparse:
-      sendVector = to_sparse(sendVector)
-    send_sig = dist.isend(sendVector, dst=dst)
-            
+        send_sparse(sendVector, dst)
+    else:
+        send_sig = dist.isend(sendVector, dst=dst)
+        
     # Handle the case where the last chunk's size is > the other chunk sizes. eg vector of size 9 and 4 nodes.
     recvNode = rank - 1 if rank - 1 >= 0 else size - 1
     recvChunk = getChunkPos(recvNode - i, totalChunks)
+    
     sizeList = list(resVec.size())
-    if sparse:
-      if recvChunk == totalChunks - 1:
-        recvVec = torch.zeros_like(lastChunk_sparse)
-      else:
-        recvVec = torch.zeros_like(sendVector)
-    else:
-      if recvChunk == totalChunks - 1:
+    if recvChunk == totalChunks - 1:
         sizeList[0] = tensorSize - recvChunk*chunkSize
-      else:
+    else:
         sizeList[0] = chunkSize
-      recvVec = torch.zeros(sizeList, dtype=sendVector.dtype)
+        
+    if sparse:
+        recvVec = recv_sparse(recvNode, tensorDim, sizeList, sendVector.dtype)
+    else:
+        recvVec = torch.zeros(sizeList, dtype=sendVector.dtype)
+        recv_sig = dist.irecv(recvVec, src=recvNode)
 
-    recv_sig = dist.irecv(recvVec, src=recvNode)
-    send_sig.wait()
-    recv_sig.wait()
+    if not sparse:
+        send_sig.wait()
+        recv_sig.wait()
 
     if sparse:
       recvVec = recvVec.to_dense()
@@ -280,31 +329,27 @@ def ring_all_reduce(rank, tensor, size, sparse):
       dst = (rank + 1) % size
       sendVector = getTensorChunk(resVec, (rank - i + 1) % size, totalChunks, chunkSize)
       if sparse:
-        sendVector = to_sparse(sendVector)
-        
+        send_sparse(sendVector, dst)  
       send_sig = dist.isend(sendVector, dst=dst)
       recvNode = rank - 1 if rank - 1 >= 0 else size - 1
       recvChunk = (recvNode - i + 1) %  size
       sizeList = list(resVec.size())
-      if sparse:
-        if recvChunk == totalChunks - 1:
-          recvVec = torch.zeros_like(lastChunk_sparse)
-        else:
-          recvVec = torch.zeros_like(sendVector)
-      else:
-        if recvChunk == totalChunks - 1:
+
+      if recvChunk == totalChunks - 1:
           sizeList[0] = tensorSize - recvChunk*chunkSize
-        else:
+      else:
           sizeList[0] = chunkSize
-        recvVec = torch.zeros(sizeList, dtype=sendVector.dtype)
-
-      recv_sig = dist.irecv(recvVec, src=recvNode)
-      send_sig.wait()
-      recv_sig.wait()
 
       if sparse:
-        recvVec = recvVec.to_dense()
-        
+          recvVec = recv_sparse(recvNode, tensorDim, sizeList, sendVector.dtype)
+      else:
+          recvVec = torch.zeros(sizeList, dtype=sendVector.dtype)
+          recv_sig = dist.irecv(recvVec, src=recvNode)
+
+      if not sparse:
+          send_sig.wait()
+          recv_sig.wait()
+
       # Replace received chunk in resVec                                                                                                                                                             
       for i in range(0, recvVec.size(0)):
         resVec[recvChunk*chunkSize + i] = recvVec[i]
