@@ -34,6 +34,7 @@ parser.add_argument('--master-ip', default='tcp://10.10.1.1:6585', type=str,
                     help='master ip')
 parser.add_argument('--num-nodes', type=int, help='total number of nodes')
 parser.add_argument('--topology', type=str, help='topology for all reduce: 1) tree 2) butterfly 3) ring 4) rec-double-half')
+parser.add_argument('--sparse', type=bool, help='If true, use sparse representation for reduction')
 
 def train_model(model, train_loader, optimizer, criterion, epoch, args):
     """                                                                                                                                                                    
@@ -69,7 +70,7 @@ def train_model(model, train_loader, optimizer, criterion, epoch, args):
         loss.backward()
 
         # Do all reduce
-        performAllReduce(model, args.rank, args.num_nodes, args.topology)
+        performAllReduce(model, args.rank, args.num_nodes, args.topology, args.sparse)
 
         # Update the weights
         optimizer.step()
