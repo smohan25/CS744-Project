@@ -18,7 +18,7 @@ parser.add_argument("--master", type=str, default='10.10.1.1:2345',
 
 args = parser.parse_args()
 
-dist.init_process_group("gloo", init_method='tcp://10.10.1.2:23456',
+dist.init_process_group("gloo", init_method=f'tcp://{args.master}',
                         rank=args.rank, world_size=2)
 
 if args.rank == 0:
