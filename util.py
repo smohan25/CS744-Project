@@ -4,18 +4,20 @@ import torch.distributed as dist
 import math
 from typing import List
 
-def to_sparse(x):
-    """ converts dense tensor x to sparse format
-        Source: https://discuss.pytorch.org/t/how-to-convert-a-dense-matrix-to-a-sparse-one/7809/3 """
-    x_typename = torch.typename(x).split('.')[-1]
-    sparse_tensortype = getattr(torch.sparse, x_typename)
 
-    indices = torch.nonzero(x)
-    if len(indices.shape) == 0:  # if all elements are zeros
-        return sparse_tensortype(*x.shape)
-    indices = indices.t()
-    values = x[tuple(indices[i] for i in range(indices.shape[0]))]
-    return sparse_tensortype(indices, values, x.size())
+# def to_sparse(x):
+#     """ converts dense tensor x to sparse format
+#         Source: https://discuss.pytorch.org/t/how-to-convert-a-dense-matrix-to-a-sparse-one/7809/3 """
+#     x_typename = torch.typename(x).split('.')[-1]
+#     sparse_tensortype = getattr(torch.sparse, x_typename)
+
+#     indices = torch.nonzero(x)
+#     if len(indices.shape) == 0:  # if all elements are zeros
+#         return sparse_tensortype(*x.shape)
+#     indices = indices.t()
+#     values = x[tuple(indices[i] for i in range(indices.shape[0]))]
+#     return sparse_tensortype(indices, values, x.size())
+
 
 def send_sparse(tensor, dst):
     """ Sends a sparse tensor. To send a sparse tensor we need to communicate 3 things.
@@ -30,13 +32,14 @@ def send_sparse(tensor, dst):
     """
 
     # Convert to a sparse tensor
-    tensor = to_sparse(tensor)
+    tensor = tensor.to_sparse()
 
     send_nnz = dist.isend(torch.tensor(tensor._nnz()), dst)
-    send_indices = dist.isend(torch.tensor(tensor._indices()), dst)
-    send_values = dist.isend(torch.tensor(tensor._values()), dst)
+    send_indices = dist.isend(tensor.indices(), dst)
+    send_values = dist.isend(tensor.values(), dst)
 
     return send_nnz, send_indices, send_values
+
 
 def recv_sparse(src, tensorDim, tensorSize, dtype, s1=None, s2=None, s3=None):
     """ Receives a sparse tensor asynchronously from a node.
@@ -52,7 +55,7 @@ def recv_sparse(src, tensorDim, tensorSize, dtype, s1=None, s2=None, s3=None):
 
     Returns: Dense representation of the received vector.
     """
-    
+
     nnz = torch.zeros([1], dtype=dtype)
     recv_nnz = dist.irecv(nnz, src)
 
@@ -74,116 +77,122 @@ def recv_sparse(src, tensorDim, tensorSize, dtype, s1=None, s2=None, s3=None):
         s3.wait()
     recv_values.wait()
 
-    recvSparseTensor = torch.sparse.LongTensor(indices, values, torch.Size(tensorSize))
+    recvSparseTensor = torch.sparse.LongTensor(
+        indices, values, torch.Size(tensorSize))
     return recvSparseTensor.to_dense()
-    
+
+
 def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int):
-  """
-  Supports even number of nodes only.
-  """
-  # determine the number of rounds of gather, followed by scatter
-  rounds = int(math.log2(world_size))
-  if 2 ** rounds < world_size:
-    rounds += 1
-  
-  # GATHER
-  for i in range(rounds):
-    # nodes participating in out and in
-    ins = list(range(0, world_size, 2**(i+1)))
-    outs = list(set(list(range(0, world_size, 2**i))) - set(ins))
+    """
+    Supports even number of nodes only.
+    """
+    # determine the number of rounds of gather, followed by scatter
+    rounds = int(math.log2(world_size))
+    if 2 ** rounds < world_size:
+        rounds += 1
 
-    if rank in outs:
-      index = outs.index(rank)
-      _in = ins[index]
-      dist.send(tensor, _in)
+    # GATHER
+    for i in range(rounds):
+        # nodes participating in out and in
+        ins = list(range(0, world_size, 2**(i+1)))
+        outs = list(set(list(range(0, world_size, 2**i))) - set(ins))
 
-    if rank in ins:
-      index = ins.index(rank)
-      if index < len(outs):
-        _out = outs[index]
-        t = torch.zeros_like(tensor)
-        dist.recv(t, _out)
-        tensor += t
+        if rank in outs:
+            index = outs.index(rank)
+            _in = ins[index]
+            dist.send(tensor, _in)
 
-  # at rank 0, divide by world_size to get the average
-  if rank == 0:
-    tensor /= world_size
+        if rank in ins:
+            index = ins.index(rank)
+            if index < len(outs):
+                _out = outs[index]
+                t = torch.zeros_like(tensor)
+                dist.recv(t, _out)
+                tensor += t
 
-  # SCATTER
-  for i in range(rounds):
-    # nodes participating in out and in
-    outs = list(range(0, world_size, 2**(rounds-i)))
-    ins = list(set(list(range(0, world_size, 2**(rounds-i-1)))) - set(outs))
+    # at rank 0, divide by world_size to get the average
+    if rank == 0:
+        tensor /= world_size
 
-    if rank in outs:
-      index = outs.index(rank)
-      if index < len(ins):
-        _in = ins[index]
-        dist.send(tensor, _in)
-    
-    if rank in ins:
-      index = ins.index(rank)
-      _out = outs[index]
-      dist.recv(tensor, _out)
+    # SCATTER
+    for i in range(rounds):
+        # nodes participating in out and in
+        outs = list(range(0, world_size, 2**(rounds-i)))
+        ins = list(set(list(range(0, world_size, 2**(rounds-i-1)))) - set(outs))
 
+        if rank in outs:
+            index = outs.index(rank)
+            if index < len(ins):
+                _in = ins[index]
+                dist.send(tensor, _in)
 
-def _my_swap(ins: List, start: int, swap_unit: int):
-  for i in range(start, start+swap_unit):
-    temp = ins[i]
-    ins[i] = ins[i+swap_unit]
-    ins[i+swap_unit] = temp
+        if rank in ins:
+            index = ins.index(rank)
+            _out = outs[index]
+            dist.recv(tensor, _out)
+
 
 def treeAllReduce(model, rank, size):
-  """  Helper function to call tree reduce for the model """
-  for param in model.parameters():
-    tree_all_reduce(rank, param.data, size)
+    """  Helper function to call tree reduce for the model """
+    for param in model.parameters():
+        tree_all_reduce(rank, param.data, size)
 
 ######################################################
 ##### END OF TREE ALL REDUCE #########################
 
+
+def _my_swap(ins: List, start: int, swap_unit: int):
+    for i in range(start, start+swap_unit):
+        temp = ins[i]
+        ins[i] = ins[i+swap_unit]
+        ins[i+swap_unit] = temp
+
+
 def butterfly_all_reduce(rank: int, tensor: torch.Tensor, world_size: int):
-  """
-  Supports homogeneous Butterfly networks. Homogeneous networks have 2^n nodes.
-  """
-  # determine the number of layers
-  layers = int(math.log2(world_size))
+    """
+    Supports homogeneous Butterfly networks. Homogeneous networks have 2^n nodes.
+    """
+    # determine the number of layers
+    layers = int(math.log2(world_size))
 
-  # in and out are the same in this algorithm
-  for i in range(layers):
-    # generate the ins list
-    # how many nodes are grouped
-    swap_unit = 2 ** i
-    # skip
-    skip = 2 * swap_unit
+    # in and out are the same in this algorithm
+    for i in range(layers):
+        # generate the ins list
+        # how many nodes are grouped
+        swap_unit = 2 ** i
+        # skip
+        skip = 2 * swap_unit
 
-    ins = list(range(0, world_size))
-    for j in range(0, world_size, skip):
-      _my_swap(ins, j, swap_unit)
+        ins = list(range(0, world_size))
+        for j in range(0, world_size, skip):
+            _my_swap(ins, j, swap_unit)
 
-    # send asynchronously
-    send_req = dist.isend(tensor, ins[rank])
+        # send asynchronously
+        send_req = dist.isend(tensor, ins[rank])
 
-    # recv asynchronously
-    t = torch.zeros_like(tensor)
-    recv_req = dist.irecv(t, ins[rank])
+        # recv asynchronously
+        t = torch.zeros_like(tensor)
+        recv_req = dist.irecv(t, ins[rank])
 
-    send_req.wait()
-    recv_req.wait()
+        send_req.wait()
+        recv_req.wait()
 
-    # merge
-    tensor += t
-  
-  # divide by world_size to get average
-  tensor /= world_size
+        # merge
+        tensor += t
+
+    # divide by world_size to get average
+    tensor /= world_size
+
 
 def butterflyAllReduce(model, rank, size):
-  """ Helper function to call butterfly reduce for the model """
-  for param in model.parameters():
-    butterfly_all_reduce(rank, param.data, size)
+    """ Helper function to call butterfly reduce for the model """
+    for param in model.parameters():
+        butterfly_all_reduce(rank, param.data, size)
 
 ######################################################
 ##### END OF BUTTERFLY ALL REDUCE ####################
-    
+
+
 def topHalf(tensor):
     # In dimension 0
     size = tensor.size(0)
@@ -191,13 +200,15 @@ def topHalf(tensor):
         return tensor.narrow(0, 0, size/2)
     else:
         return tensor.narrow(0, 0, size/2 + 1)
-    
+
+
 def botHalf(tensor):
     size = tensor.size(0)
     if size % 2 == 0:
         return tensor.narrow(0, size/2, size/2)
     else:
         return tensor.narrow(0, size/2 + 1, size/2)
+
 
 def recursive_halving_doubling(rank, tensor, size, sparse):
     resVec = tensor
@@ -213,11 +224,12 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
 
             if sparse:
                 s1, s2, s3 = send_sparse(sendVector, dest)
-                recvVector = recv_sparse(dest, tensorDim, list(recvVector.size()), s1, s2, s3)
+                recvVector = recv_sparse(
+                    dest, tensorDim, list(recvVector.size()), s1, s2, s3)
             else:
                 dist.send(sendVector, dest)
                 dist.recv(recvVector, dest)
-            
+
             res = torch.cat((concatVector, recvVector))
             resVec = resVec.add(res)
         else:
@@ -228,7 +240,8 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
 
             if sparse:
                 s1, s2, s3 = send_sparse(sendVector, dest)
-                recvVector = recv_sparse(dest, tensorDim, list(recvVector.size()), s1, s2, s3)
+                recvVector = recv_sparse(
+                    dest, tensorDim, list(recvVector.size()), s1, s2, s3)
             else:
                 dist.recv(recvVector, src=dest)
                 dist.send(sendVector, dest)
@@ -236,7 +249,6 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
             res = torch.cat((recvVector, concatVector))
             resVec = resVec.add(res)
 
-      
         if (rank % d) < d/2:
             resVec = botHalf(resVec)
         else:
@@ -251,7 +263,8 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
             dest = rank + d/2
             if sparse:
                 s1, s2, s3 = send_sparse(resVec, dest)
-                recvVector = recv_sparse(dest, tensorDim, list(recvVector.size()), s1, s2, s3)
+                recvVector = recv_sparse(
+                    dest, tensorDim, list(recvVector.size()), s1, s2, s3)
             else:
                 dist.send(resVec, dest)
                 dist.recv(recvVector, src=dest)
@@ -260,7 +273,8 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
             dest = rank - d/2
             if sparse:
                 s1, s2, s3 = send_sparse(resVec, dest)
-		recvVector = recv_sparse(dest, tensorDim, list(recvVector.size()), s1, s2, s3)
+                recvVector = recv_sparse(
+                    dest, tensorDim, list(recvVector.size()), s1, s2, s3)
             else:
                 dist.recv(recvVector, src=dest)
                 dist.send(resVec, dest)
@@ -268,7 +282,7 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
         d /= 2
 
     tensor = resVec/size
-        
+
 
 ######################################################
 ##### END OF REC DOUBLING AND HALVING ################
@@ -284,27 +298,30 @@ def getTensorChunk(tensor, i, totalChunks, chunkSize):
         return tensor.narrow(0, i*chunkSize, newSize)
     return tensor.narrow(0, i*chunkSize, chunkSize)
 
+
 def getChunkPos(i, totalChunks):
     """ When the chunk pos is -ve, return a +ve val """
     if i < 0:
 
-      return totalChunks + i
+        return totalChunks + i
     else:
         return i
 
+
 def ring_all_reduce(rank, tensor, size, sparse):
-    tensor = torch.tensor([[1,0,2,0,3,0,4,0], [1,0,0,11,3,0,6,0], [1,0,0,0,0,0,8,0]])
+    tensor = torch.tensor([[1, 0, 2, 0, 3, 0, 4, 0], [
+                          1, 0, 0, 11, 3, 0, 6, 0], [1, 0, 0, 0, 0, 0, 8, 0]])
     resVec = tensor
     tensorSize = tensor.size(0)
     tensorDim = len(tensor.size())
     totalChunks = size
     chunkSize = int(tensorSize/totalChunks)
-    if tensorSize  % size != 0:
+    if tensorSize % size != 0:
         last = tensorSize % size
 
     lastChunk = getTensorChunk(resVec, totalChunks - 1, totalChunks, chunkSize)
     lastChunk_sparse = to_sparse(lastChunk)
-                             
+
     for i in range(size-1):
         dst = (rank + 1) % size
         sendVector = getTensorChunk(resVec, rank - i, totalChunks, chunkSize)
@@ -312,19 +329,20 @@ def ring_all_reduce(rank, tensor, size, sparse):
             s1, s2, s3 = send_sparse(sendVector, dst)
         else:
             send_sig = dist.isend(sendVector, dst=dst)
-        
+
         # Handle the case where the last chunk's size is > the other chunk sizes. eg vector of size 9 and 4 nodes.
         recvNode = rank - 1 if rank - 1 >= 0 else size - 1
         recvChunk = getChunkPos(recvNode - i, totalChunks)
-    
+
         sizeList = list(resVec.size())
         if recvChunk == totalChunks - 1:
             sizeList[0] = tensorSize - recvChunk*chunkSize
         else:
             sizeList[0] = chunkSize
-        
+
         if sparse:
-            recvVec = recv_sparse(recvNode, tensorDim, sizeList, sendVector.dtype, s1, s2, s3)
+            recvVec = recv_sparse(recvNode, tensorDim,
+                                  sizeList, sendVector.dtype, s1, s2, s3)
         else:
             recvVec = torch.zeros(sizeList, dtype=sendVector.dtype)
             recv_sig = dist.irecv(recvVec, src=recvNode)
@@ -350,17 +368,18 @@ def ring_all_reduce(rank, tensor, size, sparse):
             recvVec = torch.cat((concatVec1, recvVec, concatVec2))
 
         resVec = resVec.add(recvVec)
-             
-    # Perform all-gather now....                                                                                                                                                                        
+
+    # Perform all-gather now....
     for i in range(size-1):
         dst = (rank + 1) % size
-        sendVector = getTensorChunk(resVec, (rank - i + 1) % size, totalChunks, chunkSize)
+        sendVector = getTensorChunk(
+            resVec, (rank - i + 1) % size, totalChunks, chunkSize)
         if sparse:
             s1, s2, s3 = send_sparse(sendVector, dst)
         else:
             send_sig = dist.isend(sendVector, dst=dst)
         recvNode = rank - 1 if rank - 1 >= 0 else size - 1
-        recvChunk = (recvNode - i + 1) %  size
+        recvChunk = (recvNode - i + 1) % size
         sizeList = list(resVec.size())
 
         if recvChunk == totalChunks - 1:
@@ -369,7 +388,8 @@ def ring_all_reduce(rank, tensor, size, sparse):
             sizeList[0] = chunkSize
 
         if sparse:
-            recvVec = recv_sparse(recvNode, tensorDim, sizeList, sendVector.dtype, s1, s2, s3)
+            recvVec = recv_sparse(recvNode, tensorDim,
+                                  sizeList, sendVector.dtype, s1, s2, s3)
         else:
             recvVec = torch.zeros(sizeList, dtype=sendVector.dtype)
             recv_sig = dist.irecv(recvVec, src=recvNode)
@@ -378,7 +398,7 @@ def ring_all_reduce(rank, tensor, size, sparse):
             send_sig.wait()
             recv_sig.wait()
 
-        # Replace received chunk in resVec                                                                                                                                                             
+        # Replace received chunk in resVec
         for i in range(0, recvVec.size(0)):
             resVec[recvChunk*chunkSize + i] = recvVec[i]
 
@@ -387,18 +407,16 @@ def ring_all_reduce(rank, tensor, size, sparse):
     exit()
 
 ######################################################
-##### END OF RING ALL REDUCE #########################    
+##### END OF RING ALL REDUCE #########################
 
 
 def performAllReduce(model, rank, size, topology, sparse):
-  for param in model.parameters():
-    if topology == "rec-double-half":
-      recursive_halving_doubling(rank, param.data, size, sparse)
-    elif topology == "ring":
-      ring_all_reduce(rank, param.data, size, sparse)
-    elif topology == "tree":
-      tree_all_reduce(rank, param.data, size)
-    elif topology == "butterfly":
-      butterfly_all_reduce(rank, param.data, size)
-
-  
+    for param in model.parameters():
+        if topology == "rec-double-half":
+            recursive_halving_doubling(rank, param.data, size, sparse)
+        elif topology == "ring":
+            ring_all_reduce(rank, param.data, size, sparse)
+        elif topology == "tree":
+            tree_all_reduce(rank, param.data, size)
+        elif topology == "butterfly":
+            butterfly_all_reduce(rank, param.data, size)
