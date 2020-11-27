@@ -197,60 +197,77 @@ def botHalf(tensor):
     if size % 2 == 0:
         return tensor.narrow(0, size/2, size/2)
     else:
-        return tensor.narrow(0, size/2+1, size/2)
+        return tensor.narrow(0, size/2 + 1, size/2)
 
-def recursive_halving_doubling(rank, tensor, size):
-  resVec = tensor
-  steps = math.log(size, 2)
-  d = 2
-  for i in range(int(steps)):
-    if (rank % d) < d/2:
-      dest = rank + d/2
-      sendVector = topHalf(resVec)
-      recvVector = torch.zeros_like(botHalf(resVec))
-      concatVector = torch.zeros_like(sendVector)
-      dist.send(sendVector, dest)
+def recursive_halving_doubling(rank, tensor, size, sparse):
+    resVec = tensor
+    steps = math.log(size, 2)
+    tensorDim = len(tensor.size())
+    d = 2
+    for i in range(int(steps)):
+        if (rank % d) < d/2:
+            dest = rank + d/2
+            sendVector = topHalf(resVec)
+            recvVector = torch.zeros_like(botHalf(resVec))
+            concatVector = torch.zeros_like(sendVector)
 
-      dist.recv(recvVector, dest)
+            if sparse:
+                s1, s2, s3 = send_sparse(sendVector, dest)
+                recvVector = recv_sparse(dest, tensorDim, list(recvVector.size()), s1, s2, s3)
+            else:
+                dist.send(sendVector, dest)
+                dist.recv(recvVector, dest)
+            
+            res = torch.cat((concatVector, recvVector))
+            resVec = resVec.add(res)
+        else:
+            dest = rank - d/2
+            sendVector = botHalf(resVec)
+            recvVector = torch.zeros_like(topHalf(resVec))
+            concatVector = torch.zeros_like(sendVector)
 
-      res = torch.cat((concatVector, recvVector))
-      resVec = resVec.add(res)
-    else:
-      dest = rank - d/2
-      sendVector = botHalf(resVec)
-      recvVector = torch.zeros_like(topHalf(resVec))
-      concatVector = torch.zeros_like(sendVector)
-      dist.recv(recvVector, src=dest)
+            if sparse:
+                s1, s2, s3 = send_sparse(sendVector, dest)
+                recvVector = recv_sparse(dest, tensorDim, list(recvVector.size()), s1, s2, s3)
+            else:
+                dist.recv(recvVector, src=dest)
+                dist.send(sendVector, dest)
 
-      dist.send(sendVector, dest)
-
-      res = torch.cat((recvVector, concatVector))
-      resVec = resVec.add(res)
+            res = torch.cat((recvVector, concatVector))
+            resVec = resVec.add(res)
 
       
-    if (rank % d) < d/2:
-      resVec = botHalf(resVec)
-    else:
-      resVec = topHalf(resVec)
-    d *= 2
+        if (rank % d) < d/2:
+            resVec = botHalf(resVec)
+        else:
+            resVec = topHalf(resVec)
+        d *= 2
 
     # Each node now has 1/size of the total reduce. Perform all-gather...
     d = size
     for i in range(int(steps)):
-      recvVector = torch.zeros_like(resVec)
-      if (rank % d) < d/2:
-        dest = rank + d/2
-        dist.send(resVec, dest)
-        dist.recv(recvVector, src=dest)
-        resVec = torch.cat((recvVector, resVec))
-      else:
-        dest = rank - d/2
-        dist.recv(recvVector, src=dest)
-        dist.send(resVec, dest)
-        resVec = torch.cat((resVec, recvVector))
-      d /= 2
+        recvVector = torch.zeros_like(resVec)
+        if (rank % d) < d/2:
+            dest = rank + d/2
+            if sparse:
+                s1, s2, s3 = send_sparse(resVec, dest)
+                recvVector = recv_sparse(dest, tensorDim, list(recvVector.size()), s1, s2, s3)
+            else:
+                dist.send(resVec, dest)
+                dist.recv(recvVector, src=dest)
+            resVec = torch.cat((recvVector, resVec))
+        else:
+            dest = rank - d/2
+            if sparse:
+                s1, s2, s3 = send_sparse(resVec, dest)
+		recvVector = recv_sparse(dest, tensorDim, list(recvVector.size()), s1, s2, s3)
+            else:
+                dist.recv(recvVector, src=dest)
+                dist.send(resVec, dest)
+            resVec = torch.cat((resVec, recvVector))
+        d /= 2
 
-  tensor = resVec/size
+    tensor = resVec/size
         
 
 ######################################################
@@ -376,7 +393,7 @@ def ring_all_reduce(rank, tensor, size, sparse):
 def performAllReduce(model, rank, size, topology, sparse):
   for param in model.parameters():
     if topology == "rec-double-half":
-      recursive_halving_doubling(rank, param.data, size)
+      recursive_halving_doubling(rank, param.data, size, sparse)
     elif topology == "ring":
       ring_all_reduce(rank, param.data, size, sparse)
     elif topology == "tree":
