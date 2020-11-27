@@ -5,20 +5,6 @@ import math
 from typing import List
 
 
-# def to_sparse(x):
-#     """ converts dense tensor x to sparse format
-#         Source: https://discuss.pytorch.org/t/how-to-convert-a-dense-matrix-to-a-sparse-one/7809/3 """
-#     x_typename = torch.typename(x).split('.')[-1]
-#     sparse_tensortype = getattr(torch.sparse, x_typename)
-
-#     indices = torch.nonzero(x)
-#     if len(indices.shape) == 0:  # if all elements are zeros
-#         return sparse_tensortype(*x.shape)
-#     indices = indices.t()
-#     values = x[tuple(indices[i] for i in range(indices.shape[0]))]
-#     return sparse_tensortype(indices, values, x.size())
-
-
 def send_sparse(tensor, dst):
     """ Sends a sparse tensor. To send a sparse tensor we need to communicate 3 things.
     1. nnz - number of non-zero elements.
@@ -32,11 +18,11 @@ def send_sparse(tensor, dst):
     """
 
     # Convert to a sparse tensor
-    tensor = tensor.to_sparse()
+    t_sp = tensor.to_sparse()
 
-    send_nnz = dist.isend(torch.tensor(tensor._nnz()), dst)
-    send_indices = dist.isend(tensor.indices(), dst)
-    send_values = dist.isend(tensor.values(), dst)
+    send_nnz = dist.isend(torch.tensor(t_sp._nnz()), dst)
+    send_indices = dist.isend(t_sp.indices(), dst)
+    send_values = dist.isend(t_sp.values(), dst)
 
     return send_nnz, send_indices, send_values
 
@@ -56,14 +42,13 @@ def recv_sparse(src, tensorDim, tensorSize, dtype, s1=None, s2=None, s3=None):
     Returns: Dense representation of the received vector.
     """
 
-    nnz = torch.zeros([1], dtype=dtype)
+    nnz = torch.zeros([1], dtype=int)
     recv_nnz = dist.irecv(nnz, src)
-
     if s1 is not None:
         s1.wait()
     recv_nnz.wait()
 
-    indices = torch.zeros([tensorDim, nnz], dtype=dtype)
+    indices = torch.zeros([tensorDim, nnz], dtype=int)
     recv_indices = dist.irecv(indices, src)
 
     values = torch.zeros([nnz], dtype=dtype)
