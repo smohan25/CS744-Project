@@ -11,7 +11,7 @@ import argparse
 
 from util import butterfly_all_reduce
 
-parser = argparse.ArgumentParser(description="Basic Tree AllReduce")
+parser = argparse.ArgumentParser(description="Basic Butterfly AllReduce")
 parser.add_argument("--rank", type=int, default=0, help="Rank of the process")
 parser.add_argument("--world_size", type=int,default=2, help="No. of processes")
 parser.add_argument("--sparse", help="Test sparse", action="store_true")

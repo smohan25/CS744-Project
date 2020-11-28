@@ -11,7 +11,7 @@ from util import send_sparse, recv_sparse
 
 import argparse
 
-parser = argparse.ArgumentParser(description="Basic Send and Recv")
+parser = argparse.ArgumentParser(description="Basic Sparse Send and Recv")
 parser.add_argument("--rank", type=int, default=0, help="Rank of the process")
 parser.add_argument("--master", type=str, default='10.10.1.1:2345',
                     help="Master IP")
