@@ -44,6 +44,9 @@ def recv_sparse(src, tensorDim, tensorSize, dtype, s1=None, s2=None, s3=None):
 
     nnz = torch.zeros([1], dtype=int)
     recv_nnz = dist.irecv(nnz, src)
+
+    nnz = torch.zeros([1], dtype=int)
+    recv_nnz = dist.irecv(nnz, src)
     if s1 is not None:
         s1.wait()
     recv_nnz.wait()
