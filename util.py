@@ -45,8 +45,6 @@ def recv_sparse(src, tensorDim, tensorSize, dtype, s1=None, s2=None, s3=None):
     nnz = torch.zeros([1], dtype=int)
     recv_nnz = dist.irecv(nnz, src)
 
-    nnz = torch.zeros([1], dtype=int)
-    recv_nnz = dist.irecv(nnz, src)
     if s1 is not None:
         s1.wait()
     recv_nnz.wait()
@@ -136,7 +134,8 @@ def _my_swap(ins: List, start: int, swap_unit: int):
         ins[i+swap_unit] = temp
 
 
-def butterfly_all_reduce(rank: int, tensor: torch.Tensor, world_size: int):
+def butterfly_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
+                        sparse: bool):
     """
     Supports homogeneous Butterfly networks. Homogeneous networks have 2^n nodes.
     """
@@ -155,15 +154,24 @@ def butterfly_all_reduce(rank: int, tensor: torch.Tensor, world_size: int):
         for j in range(0, world_size, skip):
             _my_swap(ins, j, swap_unit)
 
-        # send asynchronously
-        send_req = dist.isend(tensor, ins[rank])
+        if sparse:
+            # send asynchronously
+            s1, s2, s3 = send_sparse(tensor, ins[rank])
 
-        # recv asynchronously
-        t = torch.zeros_like(tensor)
-        recv_req = dist.irecv(t, ins[rank])
+            # recv asynchronously
+            t = recv_sparse(ins[rank], len(tensor.size()), tensor.size(),
+                            torch.float, s1=s1, s2=s2, s3=s3)
+        
+        else:
+            # send asynchronously
+            send_req = dist.isend(tensor, ins[rank])
 
-        send_req.wait()
-        recv_req.wait()
+            # recv asynchronously
+            t = torch.zeros_like(tensor)
+            recv_req = dist.irecv(t, ins[rank])
+
+            send_req.wait()
+            recv_req.wait()
 
         # merge
         tensor += t
@@ -405,6 +413,6 @@ def performAllReduce(model, rank, size, topology, sparse):
         elif topology == "ring":
             ring_all_reduce(rank, param.data, size, sparse)
         elif topology == "tree":
-            tree_all_reduce(rank, param.data, size)
+            tree_all_reduce(rank, param.data, size, sparse)
         elif topology == "butterfly":
-            butterfly_all_reduce(rank, param.data, size)
+            butterfly_all_reduce(rank, param.data, size, sparse)
