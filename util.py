@@ -133,8 +133,9 @@ def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
             index = ins.index(rank)
             _out = outs[index]
             if sparse:
-                tensor = recv_sparse(_out, len(tensor.size()), tensor.size(),
+                t = recv_sparse(_out, len(tensor.size()), tensor.size(),
                                     torch.float)
+                tensor.copy_(t)
             else:
                 dist.recv(tensor, _out)
 
