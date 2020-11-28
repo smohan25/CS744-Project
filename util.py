@@ -429,13 +429,17 @@ def ring_all_reduce(rank, tensor, size, sparse):
 ##### END OF RING ALL REDUCE #########################
 
 
+def _performAllReduce(tensor: torch.Tensor, rank, size, topology, sparse):
+    if topology == "rec-double-half":
+        recursive_halving_doubling(rank, tensor, size, sparse)
+    elif topology == "ring":
+        ring_all_reduce(rank, tensor, size, sparse)
+    elif topology == "tree":
+        tree_all_reduce(rank, tensor, size, sparse)
+    elif topology == "butterfly":
+        butterfly_all_reduce(rank, tensor, size, sparse)
+
+
 def performAllReduce(model, rank, size, topology, sparse):
     for param in model.parameters():
-        if topology == "rec-double-half":
-            recursive_halving_doubling(rank, param.data, size, sparse)
-        elif topology == "ring":
-            ring_all_reduce(rank, param.data, size, sparse)
-        elif topology == "tree":
-            tree_all_reduce(rank, param.data, size, sparse)
-        elif topology == "butterfly":
-            butterfly_all_reduce(rank, param.data, size, sparse)
+        _performAllReduce(param.data, rank, size, topology, sparse)

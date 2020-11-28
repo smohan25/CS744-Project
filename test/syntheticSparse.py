@@ -9,14 +9,32 @@ import torch.distributed as dist
 
 import argparse
 
-import util
+from util import _performAllReduce
+
+import scipy.sparse as sparse
+import numpy as np
+
+np.random.seed(123)
 
 parser = argparse.ArgumentParser(description="Basic Tree AllReduce")
 parser.add_argument("--rank", type=int, default=0, help="Rank of the process")
 parser.add_argument("--world_size", type=int,default=2, help="No. of processes")
 parser.add_argument("--topology", type=str, choices=["tree", "butterfly", 
                     "ring", "rec-double-half"] help="Choose topology to test")
+parser.add_argument("--size", type=str, default="1000,1000", 
+                    help="The size of random tensor")
 
 args = parser.parse_args()
 
-# TODO
+size = [int(x) for x in args.size.split(',')]
+
+# generate a random sparse tensor of size 'size'
+t = torch.tensor(sparse.random(size[0], size[1]).A) * np.random.randint(1, 10)
+# clone for non-sparse
+t_ns = t.detach().clone()
+
+# perform non-sparsified allReduce
+_performAllReduce(t_ns, args.rank, args.worl_size, args.topology, False)
+
+# perform sparsified allReduce
+_performAllReduce(t, args.rank, args.world_size, args.topology, True)
