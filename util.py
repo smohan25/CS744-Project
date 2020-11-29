@@ -197,6 +197,10 @@ def botHalf(tensor):
 
 
 def recursive_halving_doubling(rank, tensor, size, sparse):
+    """ Dim 0 of tensor must be divisible by the size (number of nodes in the cluster)
+    No support for otherwise """
+    
+    tensor = torch.tensor([1,2,3,4,5,6])
     resVec = tensor
     steps = math.log(size, 2)
     tensorDim = len(tensor.size())
@@ -210,8 +214,9 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
 
             if sparse:
                 s1, s2, s3 = send_sparse(sendVector, dest)
+                print("IT IS", s1, s2, s3)
                 recvVector = recv_sparse(
-                    dest, tensorDim, list(recvVector.size()), s1, s2, s3)
+                    dest, tensorDim, list(recvVector.size()), sendVector.dtype, s1, s2, s3)
             else:
                 dist.send(sendVector, dest)
                 dist.recv(recvVector, dest)
@@ -223,11 +228,13 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
             sendVector = botHalf(resVec)
             recvVector = torch.zeros_like(topHalf(resVec))
             concatVector = torch.zeros_like(sendVector)
-
+            
             if sparse:
                 s1, s2, s3 = send_sparse(sendVector, dest)
+                print("Sent", sendVector)
+                print("IT IS", s1, s2, s3)
                 recvVector = recv_sparse(
-                    dest, tensorDim, list(recvVector.size()), s1, s2, s3)
+                    dest, tensorDim, list(recvVector.size()), sendVector.dtype, s1, s2, s3)
             else:
                 dist.recv(recvVector, src=dest)
                 dist.send(sendVector, dest)
@@ -250,7 +257,7 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
             if sparse:
                 s1, s2, s3 = send_sparse(resVec, dest)
                 recvVector = recv_sparse(
-                    dest, tensorDim, list(recvVector.size()), s1, s2, s3)
+                    dest, tensorDim, list(recvVector.size()), resVec.dtype, s1, s2, s3)
             else:
                 dist.send(resVec, dest)
                 dist.recv(recvVector, src=dest)
@@ -260,14 +267,17 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
             if sparse:
                 s1, s2, s3 = send_sparse(resVec, dest)
                 recvVector = recv_sparse(
-                    dest, tensorDim, list(recvVector.size()), s1, s2, s3)
+                    dest, tensorDim, list(recvVector.size()), resVec.dtype, s1, s2, s3)
             else:
                 dist.recv(recvVector, src=dest)
                 dist.send(resVec, dest)
             resVec = torch.cat((resVec, recvVector))
         d /= 2
 
+    resVec /= size
     tensor.copy_(resVec)
+    print("value", tensor)
+    exit()
     #tensor = resVec/size
 
 
@@ -296,8 +306,6 @@ def getChunkPos(i, totalChunks):
 
 
 def ring_all_reduce(rank, tensor, size, sparse):
-    # tensor = torch.tensor([[1, 0, 2, 0, 3, 0, 4, 0], [
-    #                       1, 0, 0, 11, 3, 0, 6, 0], [1, 0, 0, 0, 0, 0, 8, 0]])
     resVec = tensor
     tensorSize = tensor.size(0)
     tensorDim = len(tensor.size())
@@ -391,8 +399,6 @@ def ring_all_reduce(rank, tensor, size, sparse):
 
     resVec /= size
     tensor.copy_(resVec)
-    # print("Tensor is", tensor)
-    # exit()
 
 ######################################################
 ##### END OF RING ALL REDUCE #########################
