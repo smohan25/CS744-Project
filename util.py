@@ -18,11 +18,11 @@ def send_sparse(tensor, dst):
     """
 
     # Convert to a sparse tensor
-    t_sp = tensor.to_sparse()
+    tensor = tensor.to_sparse().coalesce()
 
-    send_nnz = dist.isend(torch.tensor(t_sp._nnz()), dst)
-    send_indices = dist.isend(t_sp.indices(), dst)
-    send_values = dist.isend(t_sp.values(), dst)
+    send_nnz = dist.isend(torch.tensor(tensor._nnz()), dst)
+    send_indices = dist.isend(tensor.indices(), dst)
+    send_values = dist.isend(tensor.values(), dst)
 
     return send_nnz, send_indices, send_values
 
@@ -183,17 +183,17 @@ def topHalf(tensor):
     # In dimension 0
     size = tensor.size(0)
     if size % 2 == 0:
-        return tensor.narrow(0, 0, size/2)
+        return tensor.narrow(0, 0, int(size/2))
     else:
-        return tensor.narrow(0, 0, size/2 + 1)
+        return tensor.narrow(0, 0, int(size/2) + 1)
 
 
 def botHalf(tensor):
     size = tensor.size(0)
     if size % 2 == 0:
-        return tensor.narrow(0, size/2, size/2)
+        return tensor.narrow(0, int(size/2), int(size/2))
     else:
-        return tensor.narrow(0, size/2 + 1, size/2)
+        return tensor.narrow(0, int(size/2) + 1, int(size/2))
 
 
 def recursive_halving_doubling(rank, tensor, size, sparse):
@@ -295,8 +295,8 @@ def getChunkPos(i, totalChunks):
 
 
 def ring_all_reduce(rank, tensor, size, sparse):
-    tensor = torch.tensor([[1, 0, 2, 0, 3, 0, 4, 0], [
-                          1, 0, 0, 11, 3, 0, 6, 0], [1, 0, 0, 0, 0, 0, 8, 0]])
+    # tensor = torch.tensor([[1, 0, 2, 0, 3, 0, 4, 0], [
+    #                       1, 0, 0, 11, 3, 0, 6, 0], [1, 0, 0, 0, 0, 0, 8, 0]])
     resVec = tensor
     tensorSize = tensor.size(0)
     tensorDim = len(tensor.size())
@@ -306,7 +306,7 @@ def ring_all_reduce(rank, tensor, size, sparse):
         last = tensorSize % size
 
     lastChunk = getTensorChunk(resVec, totalChunks - 1, totalChunks, chunkSize)
-    lastChunk_sparse = to_sparse(lastChunk)
+    lastChunk_sparse = lastChunk.to_sparse()
 
     for i in range(size-1):
         dst = (rank + 1) % size
@@ -388,9 +388,10 @@ def ring_all_reduce(rank, tensor, size, sparse):
         for i in range(0, recvVec.size(0)):
             resVec[recvChunk*chunkSize + i] = recvVec[i]
 
-    tensor = resVec/size
-    print("Tensor is", tensor)
-    exit()
+    resVec /= size
+    tensor.copy_(resVec)
+    # print("Tensor is", tensor)
+    # exit()
 
 ######################################################
 ##### END OF RING ALL REDUCE #########################
