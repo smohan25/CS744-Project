@@ -200,7 +200,6 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
     """ Dim 0 of tensor must be divisible by the size (number of nodes in the cluster)
     No support for otherwise """
     
-    tensor = torch.tensor([1,2,3,4,5,6])
     resVec = tensor
     steps = math.log(size, 2)
     tensorDim = len(tensor.size())
@@ -214,7 +213,6 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
 
             if sparse:
                 s1, s2, s3 = send_sparse(sendVector, dest)
-                print("IT IS", s1, s2, s3)
                 recvVector = recv_sparse(
                     dest, tensorDim, list(recvVector.size()), sendVector.dtype, s1, s2, s3)
             else:
@@ -231,8 +229,6 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
             
             if sparse:
                 s1, s2, s3 = send_sparse(sendVector, dest)
-                print("Sent", sendVector)
-                print("IT IS", s1, s2, s3)
                 recvVector = recv_sparse(
                     dest, tensorDim, list(recvVector.size()), sendVector.dtype, s1, s2, s3)
             else:
@@ -276,9 +272,6 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
 
     resVec /= size
     tensor.copy_(resVec)
-    print("value", tensor)
-    exit()
-    #tensor = resVec/size
 
 
 ######################################################
