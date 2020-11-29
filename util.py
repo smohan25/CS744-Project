@@ -203,7 +203,7 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
     d = 2
     for i in range(int(steps)):
         if (rank % d) < d/2:
-            dest = rank + d/2
+            dest = int(rank + d/2)
             sendVector = topHalf(resVec)
             recvVector = torch.zeros_like(botHalf(resVec))
             concatVector = torch.zeros_like(sendVector)
@@ -219,7 +219,7 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
             res = torch.cat((concatVector, recvVector))
             resVec = resVec.add(res)
         else:
-            dest = rank - d/2
+            dest = int(rank - d/2)
             sendVector = botHalf(resVec)
             recvVector = torch.zeros_like(topHalf(resVec))
             concatVector = torch.zeros_like(sendVector)
@@ -246,7 +246,7 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
     for i in range(int(steps)):
         recvVector = torch.zeros_like(resVec)
         if (rank % d) < d/2:
-            dest = rank + d/2
+            dest = int(rank + d/2)
             if sparse:
                 s1, s2, s3 = send_sparse(resVec, dest)
                 recvVector = recv_sparse(
@@ -256,7 +256,7 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
                 dist.recv(recvVector, src=dest)
             resVec = torch.cat((recvVector, resVec))
         else:
-            dest = rank - d/2
+            dest = int(rank - d/2)
             if sparse:
                 s1, s2, s3 = send_sparse(resVec, dest)
                 recvVector = recv_sparse(
@@ -267,7 +267,8 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
             resVec = torch.cat((resVec, recvVector))
         d /= 2
 
-    tensor = resVec/size
+    tensor.copy_(resVec)
+    #tensor = resVec/size
 
 
 ######################################################
