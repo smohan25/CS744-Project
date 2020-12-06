@@ -22,4 +22,5 @@ class Timer:
 
     elapsed_time = time.perf_counter() - self._start_time
     self._start_time = None
-    print(f"Timer {self._id} elapsed time: {elapsed_time:0.4f} seconds")
+    return elapsed_time
+    # print(f"Timer {self._id} elapsed time: {elapsed_time:0.4f} seconds")
