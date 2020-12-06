@@ -68,7 +68,8 @@ def recv_sparse(src, tensorDim, tensorSize, dtype, s1=None, s2=None, s3=None):
     return recvSparseTensor.to_dense()
 
 
-def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int):
+def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
+                    sparse: bool):
     """
     Supports even number of nodes only.
     """
@@ -86,14 +87,24 @@ def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int):
         if rank in outs:
             index = outs.index(rank)
             _in = ins[index]
-            dist.send(tensor, _in)
+            if sparse:
+                s1, s2, s3 = send_sparse(tensor, _in)
+                s1.wait()
+                s2.wait()
+                s3.wait()
+            else:
+                dist.send(tensor, _in)
 
         if rank in ins:
             index = ins.index(rank)
             if index < len(outs):
                 _out = outs[index]
-                t = torch.zeros_like(tensor)
-                dist.recv(t, _out)
+                if sparse:
+                    t = recv_sparse(_out, len(tensor.size()), tensor.size(),
+                                    torch.float)
+                else:
+                    t = torch.zeros_like(tensor)
+                    dist.recv(t, _out)
                 tensor += t
 
     # at rank 0, divide by world_size to get the average
@@ -110,12 +121,23 @@ def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int):
             index = outs.index(rank)
             if index < len(ins):
                 _in = ins[index]
-                dist.send(tensor, _in)
+                if sparse:
+                    s1, s2, s3 = send_sparse(tensor, _in)
+                    s1.wait()
+                    s2.wait()
+                    s3.wait()
+                else:
+                    dist.send(tensor, _in)
 
         if rank in ins:
             index = ins.index(rank)
             _out = outs[index]
-            dist.recv(tensor, _out)
+            if sparse:
+                t = recv_sparse(_out, len(tensor.size()), tensor.size(),
+                                    torch.float)
+                tensor.copy_(t)
+            else:
+                dist.recv(tensor, _out)
 
 
 def treeAllReduce(model, rank, size):
@@ -127,16 +149,18 @@ def treeAllReduce(model, rank, size):
 ##### END OF TREE ALL REDUCE #########################
 
 
-def _my_swap(ins: List, start: int, swap_unit: int):
+def _swap(ins: List, start: int, swap_unit: int):
     for i in range(start, start+swap_unit):
         temp = ins[i]
         ins[i] = ins[i+swap_unit]
         ins[i+swap_unit] = temp
 
 
-def butterfly_all_reduce(rank: int, tensor: torch.Tensor, world_size: int):
+def butterfly_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
+                        sparse: bool):
     """
-    Supports homogeneous Butterfly networks. Homogeneous networks have 2^n nodes.
+    Supports homogeneous Butterfly networks.
+    Homogeneous networks have 2^n nodes.
     """
     # determine the number of layers
     layers = int(math.log2(world_size))
@@ -151,17 +175,26 @@ def butterfly_all_reduce(rank: int, tensor: torch.Tensor, world_size: int):
 
         ins = list(range(0, world_size))
         for j in range(0, world_size, skip):
-            _my_swap(ins, j, swap_unit)
+            _swap(ins, j, swap_unit)
 
-        # send asynchronously
-        send_req = dist.isend(tensor, ins[rank])
+        if sparse:
+            # send asynchronously
+            s1, s2, s3 = send_sparse(tensor, ins[rank])
 
-        # recv asynchronously
-        t = torch.zeros_like(tensor)
-        recv_req = dist.irecv(t, ins[rank])
+            # recv asynchronously
+            t = recv_sparse(ins[rank], len(tensor.size()), tensor.size(),
+                            torch.float, s1=s1, s2=s2, s3=s3)
+        
+        else:
+            # send asynchronously
+            send_req = dist.isend(tensor, ins[rank])
 
-        send_req.wait()
-        recv_req.wait()
+            # recv asynchronously
+            t = torch.zeros_like(tensor)
+            recv_req = dist.irecv(t, ins[rank])
+
+            send_req.wait()
+            recv_req.wait()
 
         # merge
         tensor += t
@@ -397,13 +430,17 @@ def ring_all_reduce(rank, tensor, size, sparse):
 ##### END OF RING ALL REDUCE #########################
 
 
+def _performAllReduce(tensor: torch.Tensor, rank, size, topology, sparse):
+    if topology == "rec-double-half":
+        recursive_halving_doubling(rank, tensor, size, sparse)
+    elif topology == "ring":
+        ring_all_reduce(rank, tensor, size, sparse)
+    elif topology == "tree":
+        tree_all_reduce(rank, tensor, size, sparse)
+    elif topology == "butterfly":
+        butterfly_all_reduce(rank, tensor, size, sparse)
+
+
 def performAllReduce(model, rank, size, topology, sparse):
     for param in model.parameters():
-        if topology == "rec-double-half":
-            recursive_halving_doubling(rank, param.data, size, sparse)
-        elif topology == "ring":
-            ring_all_reduce(rank, param.data, size, sparse)
-        elif topology == "tree":
-            tree_all_reduce(rank, param.data, size)
-        elif topology == "butterfly":
-            butterfly_all_reduce(rank, param.data, size)
+        _performAllReduce(param.data, rank, size, topology, sparse)
