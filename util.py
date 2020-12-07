@@ -242,7 +242,6 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
             dest = int(rank + d/2)
             sendVector = topHalf(resVec)
             recvVector = torch.zeros_like(botHalf(resVec))
-            concatVector = torch.zeros_like(sendVector)
 
             if sparse:
                 s1, s2, s3 = send_sparse(sendVector, dest)
@@ -252,13 +251,14 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
                 dist.send(sendVector, dest)
                 dist.recv(recvVector, dest)
 
-            res = torch.cat((concatVector, recvVector))
-            resVec = resVec.add(res)
+            index = 0
+            for j in range(int(size/2), recvVector.size(0)):
+                resVec[j] = resVec[j].add(recvVector[index])
+                index += 1
         else:
             dest = int(rank - d/2)
             sendVector = botHalf(resVec)
             recvVector = torch.zeros_like(topHalf(resVec))
-            concatVector = torch.zeros_like(sendVector)
             
             if sparse:
                 s1, s2, s3 = send_sparse(sendVector, dest)
@@ -268,8 +268,10 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
                 dist.recv(recvVector, src=dest)
                 dist.send(sendVector, dest)
 
-            res = torch.cat((recvVector, concatVector))
-            resVec = resVec.add(res)
+            index = 0
+            for j in range(0, recvVector.size(0)):
+                resVec[j] = resVec[j].add(recvVector[index])
+                index += 1
 
         if (rank % d) < d/2:
             resVec = botHalf(resVec)
@@ -372,24 +374,11 @@ def ring_all_reduce(rank, tensor, size, sparse):
             send_sig.wait()
             recv_sig.wait()
 
-        sizeList = list(resVec.size())
-        if recvChunk == 0:
-            sizeList[0] = tensorSize - chunkSize
-            concatVec = torch.zeros(sizeList, dtype=sendVector.dtype)
-            recvVec = torch.cat((recvVec, concatVec))
-        elif recvChunk == totalChunks - 1:
-            sizeList[0] = recvChunk*chunkSize
-            concatVec = torch.zeros(sizeList, dtype=sendVector.dtype)
-            recvVec = torch.cat((concatVec, recvVec))
-        else:
-            sizeList[0] = recvChunk*chunkSize
-            concatVec1 = torch.zeros(sizeList, dtype=sendVector.dtype)
-            sizeList[0] = tensorSize - (recvChunk+1)*chunkSize
-            concatVec2 = torch.zeros(sizeList, dtype=sendVector.dtype)
-            recvVec = torch.cat((concatVec1, recvVec, concatVec2))
-
-        resVec = resVec.add(recvVec)
-
+        index = 0
+        for j in range(recvChunk*chunkSize, recvVec.size(0)):
+            resVec[j] = resVec[j].add(recvVec[index])
+            index += 1
+                    
     # Perform all-gather now....
     for i in range(size-1):
         dst = (rank + 1) % size
