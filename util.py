@@ -238,6 +238,7 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
     tensorDim = len(tensor.size())
     d = 2
     for i in range(int(steps)):
+        send_signal, recv_signal = None, None
         if (rank % d) < d/2:
             dest = int(rank + d/2)
             sendVector = topHalf(resVec)
@@ -248,8 +249,8 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
                 recvVector = recv_sparse(
                     dest, tensorDim, list(recvVector.size()), sendVector.dtype, s1, s2, s3)
             else:
-                dist.send(sendVector, dest)
-                dist.recv(recvVector, dest)
+                send_signal = dist.isend(sendVector, dest)
+                recv_signal = dist.irecv(recvVector, dest)
 
             index = 0
             for j in range(int(size/2), recvVector.size(0)):
@@ -265,13 +266,15 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
                 recvVector = recv_sparse(
                     dest, tensorDim, list(recvVector.size()), sendVector.dtype, s1, s2, s3)
             else:
-                dist.recv(recvVector, src=dest)
-                dist.send(sendVector, dest)
+                send_signal = dist.isend(sendVector, dest)
+                recv_signal = dist.irecv(recvVector, dest)
 
-            index = 0
-            for j in range(0, recvVector.size(0)):
-                resVec[j] = resVec[j].add(recvVector[index])
-                index += 1
+        send_signal.wait()
+        recv_signal.wait()
+        index = 0
+        for j in range(0, recvVector.size(0)):
+            resVec[j] = resVec[j].add(recvVector[index])
+            index += 1
 
         if (rank % d) < d/2:
             resVec = botHalf(resVec)
