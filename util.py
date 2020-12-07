@@ -238,6 +238,7 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
     tensorDim = len(tensor.size())
     d = 2
     for i in range(int(steps)):
+        start_index = 0
         send_signal, recv_signal = None, None
         if (rank % d) < d/2:
             dest = int(rank + d/2)
@@ -251,11 +252,7 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
             else:
                 send_signal = dist.isend(sendVector, dest)
                 recv_signal = dist.irecv(recvVector, dest)
-
-            index = 0
-            for j in range(int(size/2), recvVector.size(0)):
-                resVec[j] = resVec[j].add(recvVector[index])
-                index += 1
+            start_index = int(size/2)
         else:
             dest = int(rank - d/2)
             sendVector = botHalf(resVec)
@@ -273,14 +270,16 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
             send_signal.wait()
             recv_signal.wait()
         index = 0
-        for j in range(0, recvVector.size(0)):
-            resVec[j] = resVec[j].add(recvVector[index])
+        for j in range(start_index, recvVector.size(0)):
+            recvVector[index] = recvVector[index].add(resVec[j])
             index += 1
 
-        if (rank % d) < d/2:
+        resVec = recvVector
+        """if (rank % d) < d/2:
             resVec = botHalf(resVec)
         else:
             resVec = topHalf(resVec)
+        """
         d *= 2
 
     # Each node now has 1/size of the total reduce. Perform all-gather...
@@ -310,7 +309,7 @@ def recursive_halving_doubling(rank, tensor, size, sparse):
                 send_signal = dist.isend(resVec, dest)
                 recv_signal = dist.irecv(recvVector, src=dest)
                 send_signal.wait()
-		recv_signal.wait()
+                recv_signal.wait()
             resVec = torch.cat((resVec, recvVector))
         d /= 2
 
