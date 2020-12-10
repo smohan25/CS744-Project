@@ -22,11 +22,12 @@ args = parser.parse_args()
 world_size = args.world_size
 
 # Modify IP accordingly.
-dist.init_process_group("gloo", init_method='tcp://10.128.0.2:2345',
+dist.init_process_group("gloo", init_method='tcp://10.10.1.1:2345',
                         rank=args.rank, world_size=world_size)
 
+print("DOne")
 size = int(args.size)
-t = torch.tensor(sparse.random(size, size, density=args.density).A, dtype=torch.float) \
+t = torch.tensor(sparse.random(size, size, density=float(args.density)).A, dtype=torch.float) \
     * np.random.randint(10, 100)
 
 t_ns = t.detach().clone()
@@ -65,7 +66,20 @@ gatherListIndices = [torch.zeros([2, nnz], dtype=torch.long) for _ in range(worl
 dist.all_gather(gatherListIndices, indices)
 gatherListValues = [torch.zeros([nnz], dtype=torch.float) for _ in range(world_size)]
 dist.all_gather(gatherListValues, values)
+#e2 = t2.stop()
 
+index = gatherListIndices[0]
+values = gatherListValues[0]
+res = torch.sparse.LongTensor(torch.LongTensor(index), torch.FloatTensor(values), t.size())
+for i in range(1, world_size):
+    index = gatherListIndices[i]
+    values = gatherListValues[i]
+    tmp = torch.sparse.LongTensor(torch.LongTensor(index), torch.FloatTensor(values), t.size())
+    res = res.add(tmp)
+
+res = res.coalesce()
+e2 = t2.stop()
+"""
 dic = {}
 for i, v in zip(gatherListIndices, gatherListValues):
     for x, y, z in zip(i[0], i[1], v):
@@ -82,7 +96,7 @@ for k, v in dic.items():
     new_values.append(v)
 #print(new_indices)
 sparseTensor = torch.sparse.LongTensor(torch.LongTensor(new_indices), torch.FloatTensor(new_values), t.size())
-e2 = t2.stop()
+#e2 = t2.stop()"""
 
 print("Allreduce, Allgather, Allgather-sparse")
 print(f"{e0:0.4f}, {e1:0.4f}, {e2:0.4f}")
