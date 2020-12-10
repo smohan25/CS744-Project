@@ -25,7 +25,7 @@ world_size = args.world_size
 dist.init_process_group("gloo", init_method='tcp://10.10.1.1:2345',
                         rank=args.rank, world_size=world_size)
 
-print("DOne")
+print("Init done")
 size = int(args.size)
 t = torch.tensor(sparse.random(size, size, density=float(args.density)).A, dtype=torch.float) \
     * np.random.randint(10, 100)
@@ -66,18 +66,21 @@ gatherListIndices = [torch.zeros([2, nnz], dtype=torch.long) for _ in range(worl
 dist.all_gather(gatherListIndices, indices)
 gatherListValues = [torch.zeros([nnz], dtype=torch.float) for _ in range(world_size)]
 dist.all_gather(gatherListValues, values)
-#e2 = t2.stop()
 
-index = gatherListIndices[0]
+"""index = gatherListIndices[0]
 values = gatherListValues[0]
 res = torch.sparse.LongTensor(torch.LongTensor(index), torch.FloatTensor(values), t.size())
 for i in range(1, world_size):
     index = gatherListIndices[i]
     values = gatherListValues[i]
     tmp = torch.sparse.LongTensor(torch.LongTensor(index), torch.FloatTensor(values), t.size())
-    res = res.add(tmp)
+    res.add_(tmp)
 
-res = res.coalesce()
+res = res.coalesce()"""
+index = torch.cat(gatherListIndices, -1)
+values = torch.cat(gatherListValues, -1)
+res =  torch.sparse.LongTensor(torch.LongTensor(index), torch.FloatTensor(values), t.size()).coalesce() 
+
 e2 = t2.stop()
 """
 dic = {}
