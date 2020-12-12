@@ -18,7 +18,10 @@ def send_sparse(tensor, dst):
     """
 
     # Convert to a sparse tensor
-    tensor = tensor.to_sparse().coalesce()
+    if tensor.layout == torch.strided:
+        tensor = tensor.to_sparse().coalesce()
+    else:
+        tensor = tensor.coalesce()
 
     send_nnz = dist.isend(torch.tensor(tensor._nnz()), dst)
     send_indices = dist.isend(tensor.indices(), dst)
@@ -27,7 +30,7 @@ def send_sparse(tensor, dst):
     return send_nnz, send_indices, send_values
 
 
-def recv_sparse(src, tensorDim, tensorSize, dtype, s1=None, s2=None, s3=None):
+def recv_sparse(src, tensorDim, tensorSize, dtype, sparse=False, s1=None, s2=None, s3=None):
     """ Receives a sparse tensor asynchronously from a node.
     Pass s1, s2, s3 when 2 nodes are both sending and receiving.
     These correspond to the respective signals from the send_sparse fucntion.
@@ -36,6 +39,7 @@ def recv_sparse(src, tensorDim, tensorSize, dtype, s1=None, s2=None, s3=None):
     tensorDim - the dimension of the tensor to be received.
     tensorSize - the size of the tensor.
     dtype - type of tensor (eng: int)
+    sparse - if returned tensor should be sparse or dense.
     s1, s2, s3 - sent signals of the vector this node sent.
     If not provided, simply receive a tensor.
 
@@ -65,7 +69,11 @@ def recv_sparse(src, tensorDim, tensorSize, dtype, s1=None, s2=None, s3=None):
 
     recvSparseTensor = torch.sparse.LongTensor(
         indices, values, torch.Size(tensorSize))
-    return recvSparseTensor.to_dense()
+    
+    if sparse:
+        return recvSparseTensor
+    else:
+        return recvSparseTensor.to_dense()
 
 
 def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
@@ -77,6 +85,10 @@ def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
     rounds = int(math.log2(world_size))
     if 2 ** rounds < world_size:
         rounds += 1
+
+    if sparse:
+        _tensor = tensor
+        tensor = tensor.to_sparse().coalesce()
 
     # GATHER
     for i in range(rounds):
@@ -101,7 +113,7 @@ def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
                 _out = outs[index]
                 if sparse:
                     t = recv_sparse(_out, len(tensor.size()), tensor.size(),
-                                    torch.float)
+                                    torch.float, sparse=True)
                 else:
                     t = torch.zeros_like(tensor)
                     dist.recv(t, _out)
@@ -110,6 +122,8 @@ def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
     # at rank 0, divide by world_size to get the average
     if rank == 0:
         tensor /= world_size
+        if sparse:
+            _tensor.copy_(tensor.to_dense())
 
     # SCATTER
     for i in range(rounds):
@@ -134,8 +148,9 @@ def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
             _out = outs[index]
             if sparse:
                 t = recv_sparse(_out, len(tensor.size()), tensor.size(),
-                                    torch.float)
+                                    torch.float, sparse=True)
                 tensor.copy_(t)
+                _tensor.copy_(t.to_dense())
             else:
                 dist.recv(tensor, _out)
 
