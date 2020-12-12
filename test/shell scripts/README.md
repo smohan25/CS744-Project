@@ -4,8 +4,8 @@
 `Usage: ./scp-syn-work.sh 7`\
 This will copy `syn-work.sh` from node0 to nodes node1 through node7.
 3. `trig-syn.sh`: A script to trigger `syn-work.sh` on other nodes.\
-`Usage: ./trig-syn.sh ring 1000,1000 8`\
-Where the arguments are `topology, tensor size and world size` respectively. 
+`Usage: ./trig-syn.sh ring 1000,1000 8 0.01`\
+Where the arguments are `topology, tensor size, world size, and density` respectively. 
 
 ## Instructions on how to use the scripts
 1. Setup ssh access from node0 to other nodes using the standard `ssh-keygen` method.
@@ -25,5 +25,5 @@ Note: Comment node0 from followers
 4. Assuming you've already setup venv on node0, do the same on other nodes using\
 `parallel-ssh -i -h followers -O StrictHostKeyChecking=no 'cd CS744-Project; ./envsetup.sh'`
 5. Run `scp-syn-work.sh` to copy `syn-work.sh` to each node's home dir.
-6. On node0 run `syntheticSparse.py`.
+6. On node0 run `syntheticSparse.py --rank 0 --world_size 4 --topology tree --size 1000,1000 --density 0.001`.
 7. On node0 itself in another terminal run `trig-syn.sh` to trigger `syntheticSparse.py` on the other nodes.
