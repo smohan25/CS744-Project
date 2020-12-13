@@ -22,6 +22,8 @@ parser.add_argument("--topology", type=str, choices=["tree", "butterfly",
                     "ring", "rec-double-half"], help="Choose topology to test")
 parser.add_argument("--size", type=str, default="1000,1000", 
                     help="The size of random tensor")
+parser.add_argument("--density", type=float, default=0.01, 
+                    help="The density of sparse tensor")
 
 args = parser.parse_args()
 
@@ -33,7 +35,7 @@ dist.init_process_group("gloo", init_method='tcp://10.10.1.1:2345',
 size = [int(x) for x in args.size.split(',')]
 
 # generate a random sparse tensor of size 'size'
-t = torch.tensor(sparse.random(size[0], size[1]).A, dtype=torch.float) \
+t = torch.tensor(sparse.random(size[0], size[1], density=args.density).A, dtype=torch.float) \
     * np.random.randint(10, 100)
 
 # clone for non-sparse

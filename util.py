@@ -81,14 +81,15 @@ def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
     """
     Supports even number of nodes only.
     """
+    from timer import Timer
+    t2 = Timer(2)
+    t2.start()
     # determine the number of rounds of gather, followed by scatter
     rounds = int(math.log2(world_size))
     if 2 ** rounds < world_size:
         rounds += 1
 
-    # from timer import Timer
-    # t2 = Timer(2)
-    # t2.start()
+    # compress
     if sparse:
         _tensor = tensor
         tensor = tensor.to_sparse()
@@ -126,8 +127,6 @@ def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
     if rank == 0:
         tensor /= world_size
     
-    # e2 = t2.stop()
-    # print(e2)
     # SCATTER
     for i in range(rounds):
         # nodes participating in out and in
@@ -156,8 +155,12 @@ def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
             else:
                 dist.recv(tensor, _out)
 
+    e2 = t2.stop()
+    # decompress
     if sparse:
         _tensor.copy_(tensor.to_dense())
+
+    return e2
 
 
 def treeAllReduce(model, rank, size):
@@ -182,6 +185,14 @@ def butterfly_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
     Supports homogeneous Butterfly networks.
     Homogeneous networks have 2^n nodes.
     """
+    from timer import Timer
+    t2 = Timer(2)
+    t2.start()
+    # compress
+    if sparse:
+        _tensor = tensor
+        tensor = tensor.to_sparse()
+
     # determine the number of layers
     layers = int(math.log2(world_size))
 
@@ -203,7 +214,7 @@ def butterfly_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
 
             # recv asynchronously
             t = recv_sparse(ins[rank], len(tensor.size()), tensor.size(),
-                            torch.float, s1=s1, s2=s2, s3=s3)
+                            torch.float, sparse=True, s1=s1, s2=s2, s3=s3)
         
         else:
             # send asynchronously
@@ -221,6 +232,13 @@ def butterfly_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
 
     # divide by world_size to get average
     tensor /= world_size
+
+    e2 = t2.stop()
+    # decompress
+    if sparse:
+        _tensor.copy_(tensor.to_dense())
+
+    return e2
 
 
 def butterflyAllReduce(model, rank, size):
@@ -453,9 +471,9 @@ def _performAllReduce(tensor: torch.Tensor, rank, size, topology, sparse):
     elif topology == "ring":
         ring_all_reduce(rank, tensor, size, sparse)
     elif topology == "tree":
-        tree_all_reduce(rank, tensor, size, sparse)
+        return tree_all_reduce(rank, tensor, size, sparse)
     elif topology == "butterfly":
-        butterfly_all_reduce(rank, tensor, size, sparse)
+        return butterfly_all_reduce(rank, tensor, size, sparse)
 
 
 def performAllReduce(model, rank, size, topology, sparse):
