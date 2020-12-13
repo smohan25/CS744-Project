@@ -35,7 +35,12 @@ dist.init_process_group("gloo", init_method='tcp://10.10.1.1:2345',
 size = [int(x) for x in args.size.split(',')]
 
 # generate a random sparse tensor of size 'size'
-t = torch.tensor(sparse.random(size[0], size[1], density=args.density).A, dtype=torch.float) \
+# t = torch.tensor(sparse.random(size[0], size[1], density=args.density).A, dtype=torch.float) \
+#     * np.random.randint(10, 100)
+t = torch.tensor(sparse.random(size[0], size[1]).A, dtype=torch.float) \
+    * np.random.randint(10, 100)
+
+t_1 = torch.tensor(sparse.random(size[0], size[1], density=0.001).A, dtype=torch.float) \
     * np.random.randint(10, 100)
 
 # clone for non-sparse
@@ -53,5 +58,10 @@ t1 = Timer(1)
 t1.start()
 e2 = _performAllReduce(t, args.rank, args.world_size, args.topology, True)
 e1 = t1.stop()
-print(f"{e0:0.4f}, {e1:0.4f}, {e2:0.4f}")
+
+t3 = Timer(3)
+t3.start()
+e4 = _performAllReduce(t, args.rank, args.world_size, args.topology, True)
+e3 = t3.stop()
+print(f"{e0:0.4f}, {e1:0.4f}, {e2:0.4f}, {e3:0.4f}, {e4:0.4f}")
 # print("after t", t)
