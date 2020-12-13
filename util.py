@@ -86,9 +86,12 @@ def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
     if 2 ** rounds < world_size:
         rounds += 1
 
+    # from timer import Timer
+    # t2 = Timer(2)
+    # t2.start()
     if sparse:
         _tensor = tensor
-        tensor = tensor.to_sparse().coalesce()
+        tensor = tensor.to_sparse()
 
     # GATHER
     for i in range(rounds):
@@ -122,9 +125,9 @@ def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
     # at rank 0, divide by world_size to get the average
     if rank == 0:
         tensor /= world_size
-        if sparse:
-            _tensor.copy_(tensor.to_dense())
-
+    
+    # e2 = t2.stop()
+    # print(e2)
     # SCATTER
     for i in range(rounds):
         # nodes participating in out and in
@@ -150,9 +153,11 @@ def tree_all_reduce(rank: int, tensor: torch.Tensor, world_size: int,
                 t = recv_sparse(_out, len(tensor.size()), tensor.size(),
                                     torch.float, sparse=True)
                 tensor.copy_(t)
-                _tensor.copy_(t.to_dense())
             else:
                 dist.recv(tensor, _out)
+
+    if sparse:
+        _tensor.copy_(tensor.to_dense())
 
 
 def treeAllReduce(model, rank, size):
