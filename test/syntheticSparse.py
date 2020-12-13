@@ -61,7 +61,7 @@ e1 = t1.stop()
 
 t3 = Timer(3)
 t3.start()
-e4 = _performAllReduce(t, args.rank, args.world_size, args.topology, True)
+e4 = _performAllReduce(t_1, args.rank, args.world_size, args.topology, True)
 e3 = t3.stop()
 print(f"{e0:0.4f}, {e1:0.4f}, {e2:0.4f}, {e3:0.4f}, {e4:0.4f}")
 # print("after t", t)
